@@ -102,7 +102,7 @@ Keep.SetSchema("Inventory", {
 -- 3. Start sessions on join
 Players.PlayerAdded:Connect(function(player)
     Keep.StartPlayerSession(player)
-        :andThen(function(stores, owner)
+        .next(function(stores, owner)
             local account   = stores.Account
             local inventory = stores.Inventory
 
@@ -112,7 +112,7 @@ Players.PlayerAdded:Connect(function(player)
             account:Increment("XP", 100)
             inventory:Append("Items", "Sword")
         end)
-        :catch(function(err)
+        .catch(function(err)
             warn("Session failed:", err)
         end)
 end)
@@ -147,6 +147,8 @@ Schemas drive reconciliation — any key present in the schema but missing from 
 A session represents the full lifecycle of a player's data — from load to release. Calling `Keep.StartPlayerSession` opens a ProfileStore session for every registered schema, wraps each in a handle, and registers them under a single owner object.
 
 Sessions are tracked internally. If a session is already active when `StartPlayerSession` is called again, the existing handles are returned immediately.
+
+Keep automatically wires `PlayerRemoving` and `game:BindToClose` internally — you do not need to call `EndPlayerSession` yourself in standard flows. `PlayerRemoving` triggers a graceful release for that player, and `BindToClose` ends all remaining sessions before the server shuts down. Only call `EndPlayerSession` manually when you need to force an early release outside of those events.
 
 ---
 
@@ -248,17 +250,17 @@ If a session is already active for this player, resolves immediately with the ex
 | Param | Type | Description |
 |-------|------|-------------|
 | `plrOrId` | `Player \| number` | The player instance or their numeric userId. |
-| `overrides` | `table?` | Optional table deep-merged into schema defaults before the ProfileStore is created. Useful for testing or first-time setup overrides. |
+| `overrides` | `table?` | Optional table deep-merged into schema defaults before the ProfileStore is created. Only meaningful for first-time players — if the player already has saved data, ProfileStore loads that existing data and the overrides have no effect. |
 
 ```lua
 Keep.StartPlayerSession(player)
-    :andThen(function(stores, owner)
+    .next(function(stores, owner)
         print("Session started:", owner.SessionId)
 
         stores.Account:Increment("Currency", 500)
         stores.Inventory:Append("Items", "Shield")
     end)
-    :catch(function(err)
+    .catch(function(err)
         warn("Could not load session:", err)
     end)
 ```
@@ -277,7 +279,7 @@ Useful for systems that initialise independently of `PlayerAdded` and need to wa
 
 ```lua
 -- In a separate system module
-Keep.AwaitSession(player):andThen(function(stores, owner)
+Keep.AwaitSession(player).next(function(stores, owner)
     local level = stores.Account:Get("Level")
     assignSpawnPoint(player, level)
 end)
@@ -316,10 +318,10 @@ This is called automatically on `PlayerRemoving`. Only call it manually if you n
 
 ```lua
 Keep.EndPlayerSession(player)
-    :andThen(function(owner)
+    .next(function(owner)
         print("Session ended cleanly for", owner.UserId)
     end)
-    :catch(function(err)
+    .catch(function(err)
         warn("Release error:", err)
     end)
 ```
@@ -565,10 +567,10 @@ Forces an immediate save of this profile outside of the auto-save cycle. Resolve
 
 ```lua
 handle:Save()
-    :andThen(function()
+    .next(function()
         print("Saved successfully")
     end)
-    :catch(function(err)
+    .catch(function(err)
         warn("Save failed:", err)
     end)
 ```
@@ -739,7 +741,7 @@ end
 ### Observing for client replication
 
 ```lua
-Keep.StartPlayerSession(player):andThen(function(stores)
+Keep.StartPlayerSession(player).next(function(stores)
     -- Replicate initial state
     DataReplicator.Send(player, stores.Account:GetAll())
 
@@ -771,7 +773,7 @@ end)
 ```lua
 -- LeaderboardModule -- initialises separately from PlayerAdded
 local function initLeaderboard(player)
-    Keep.AwaitSession(player):andThen(function(stores)
+    Keep.AwaitSession(player).next(function(stores)
         local level = stores.Account:Get("Level")
         Leaderboard.SetEntry(player, level)
 
@@ -793,7 +795,7 @@ Keep.StartPlayerSession(player, {
 })
 ```
 
-Overrides are deep-merged into schema defaults before the store is created. They only affect the server-side store initialisation — not written to the profile if the player already has saved data.
+Overrides are deep-merged into schema defaults before the ProfileStore is created. They only apply when the player has no existing saved data — if ProfileStore loads a saved profile, that data takes precedence and the overrides are ignored entirely.
 
 ---
 
@@ -802,7 +804,7 @@ Overrides are deep-merged into schema defaults before the store is created. They
 ### Tracking Kills and Deaths
 
 ```lua
-Keep.StartPlayerSession(player):andThen(function(stores)
+Keep.StartPlayerSession(player).next(function(stores)
     local account = stores.Account
 
     KillSignal:Connect(function(killer, victim)
@@ -822,7 +824,7 @@ end)
 ### Inventory Management
 
 ```lua
-Keep.StartPlayerSession(player):andThen(function(stores)
+Keep.StartPlayerSession(player).next(function(stores)
     local inv = stores.Inventory
 
     local function grantItem(itemId)
@@ -852,7 +854,7 @@ end)
 ```lua
 local XP_PER_LEVEL = 1000
 
-Keep.StartPlayerSession(player):andThen(function(stores)
+Keep.StartPlayerSession(player).next(function(stores)
     local account = stores.Account
 
     local function awardXP(amount)
@@ -921,7 +923,7 @@ end)
 
 Players.PlayerAdded:Connect(function(player)
     Keep.StartPlayerSession(player)
-        :andThen(function(stores, owner)
+        .next(function(stores, owner)
             local account = stores.Account
 
             local ls      = Instance.new("Folder", player)
@@ -934,7 +936,7 @@ Players.PlayerAdded:Connect(function(player)
                 lvl.Value = new
             end)
         end)
-        :catch(warn)
+        .catch(warn)
 end)
 ```
 
@@ -1028,7 +1030,7 @@ export type Connection = {
 }
 
 export type Promise = {
-    andThen   : (self: Promise, fn: (...any) -> ()) -> Promise,
+    next      : (self: Promise, fn: (...any) -> ()) -> Promise,
     catch     : (self: Promise, fn: (err: string) -> ()) -> Promise,
     concluded : (self: Promise, fn: () -> ()) -> Promise,
 }
@@ -1047,6 +1049,6 @@ export type Promise = {
 
 ---
 
-*Last Updated: May 5, 2026*
+*Last Updated: May 6, 2026*
 
 ---
